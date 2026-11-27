@@ -16,9 +16,10 @@ branding:
 inputs:
   runlab-key:
     description: >-
-      Your RunLab API key; pass it from a secret (the README uses one named RUNLAB_KEY). Get a
-      key with `pip install runlab-client && runlab login`.
-    required: true
+      Empty (default): keyless; the job needs `permissions: id-token: write` and signs in with
+      its GitHub OIDC token as the RunLab user who owns the repository (`runlab login` once).
+      An organization's repository passes a RunLab key here, from a secret.
+    default: ""
   results:
     description: >-
       The files whose RESULT lines to record, one per line: `GLOB [--arm A] [--project P]`,
@@ -94,13 +95,13 @@ runs:
         RUNLAB_FORK: ${{ github.event.pull_request.head.repo.full_name != '' && github.event.pull_request.head.repo.full_name != github.repository }}
       run: |
         set +e -u   # the runner's bash -e would stop at exit 4 before `fail` is read
-        if [ -z "$RUNLAB_TOKEN" ]; then
+        if [ -z "$RUNLAB_TOKEN" ] && [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
           if [ "$RUNLAB_FORK" = "true" ]; then
-            echo "::notice::runlab verdict: pull requests from forks get no secrets, so no verdict"
+            echo "::notice::runlab verdict: pull requests from forks get no OIDC token or secrets, so no verdict"
             echo "conclusion=neutral" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          echo "::error::runlab verdict: runlab-key is empty; add the RUNLAB_KEY secret"
+          echo "::error::runlab verdict: no credentials; add 'id-token: write' to the job's permissions (keyless), or pass runlab-key"
           exit 2
         fi
         case "$RUNLAB_SPEC_FROM" in

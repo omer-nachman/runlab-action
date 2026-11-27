@@ -28,24 +28,38 @@ The logic is `runlab verdict` in [runlab-client](https://github.com/omer-nachman
        expect: better                  # better | not_worse (with margin) | different
    ```
 
-2. Save your RunLab key as the repository secret `RUNLAB_KEY` (after
-   `pip install runlab-client && runlab login`):
+2. Sign in to RunLab with GitHub once, as the repository's owner:
 
    ```bash
-   python -c "import runlab_client as r; print(r.saved_login()[1])" | gh secret set RUNLAB_KEY
+   pip install runlab-client && runlab login
    ```
 
-3. Add the step after the one that trains both arms' seeds (each seed prints `RESULT:` lines,
-   see below):
+3. Give the workflow these permissions (a job's own `permissions:` replaces the workflow's,
+   so list all four there):
+
+   ```yaml
+   permissions:
+     contents: read
+     checks: write          # the check run
+     pull-requests: write   # the pull-request comment
+     id-token: write        # keyless sign-in to RunLab
+   ```
+
+   and add the step after the one that trains both arms' seeds (each seed prints `RESULT:`
+   lines, see below):
 
    ```yaml
          - uses: omer-nachman/runlab-action@v1
            with:
-             runlab-key: ${{ secrets.RUNLAB_KEY }}
              results: |
                out/pr/*.txt --arm pr-{pr}-{sha7}
                out/base/*.txt --arm base-{pr}-{sha7}
    ```
+
+No key and no secret: the job signs in with the short-lived token GitHub gives it, which names
+the repository and is minted for RunLab only; RunLab accepts it as the RunLab user bound to the
+repository owner's GitHub account, for this action's calls only. An organization's repository
+passes a key instead: `runlab-key: ${{ secrets.RUNLAB_KEY }}`.
 
 A whole workflow, both arms trained in the same job (same runner, same budget per seed):
 
@@ -56,6 +70,7 @@ permissions:
   contents: read
   checks: write          # the check run
   pull-requests: write   # the pull-request comment
+  id-token: write        # keyless sign-in to RunLab
 jobs:
   verdict:
     runs-on: ubuntu-latest
@@ -75,7 +90,6 @@ jobs:
           done
       - uses: omer-nachman/runlab-action@v1
         with:
-          runlab-key: ${{ secrets.RUNLAB_KEY }}
           results: |
             out/pr/*.txt --arm pr-{pr}-{sha7}
             out/base/*.txt --arm base-{pr}-{sha7}
@@ -101,14 +115,14 @@ From Python, `print(runlab_client.result_line("any", "val_acc", acc, seed=seed))
 | `paths` | a pull request that changes none of them gets a neutral check and records nothing |
 
 The check is only as trustworthy as the job that runs the seeds: it runs in the pull
-request's own workflow. Pull requests from forks get no secrets in GitHub Actions, so they get
-a notice and no verdict.
+request's own workflow. Pull requests from forks get no token or secrets in GitHub Actions, so
+they get a notice and no verdict.
 
 ## Inputs
 
 | Input | Default | Meaning |
 |---|---|---|
-| `runlab-key` | required | your RunLab API key, from a secret |
+| `runlab-key` | empty: keyless | a RunLab key, from a secret; needed for an organization's repository |
 | `results` | none | files to record, one per line: `GLOB [--arm A] [--project P]`; `{pr}`, `{sha}`, `{sha7}`, `{branch}` are filled in |
 | `spec` | `.runlab/verdict.yml` | the spec's path |
 | `spec-from` | `base` | `head` reads the checked-out spec instead, to try a new one |
