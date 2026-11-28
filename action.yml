@@ -7,8 +7,7 @@
 # can inject shell code.
 name: runlab verdict
 description: >-
-  Did this change help? A pull-request check with the difference, its 95 % CI and the verdict
-  over seeds; fails when the change misses what you expected of it.
+  Did this PR help? A check with the difference over seeds, its 95 % CI and the verdict; fails if it misses its goal.
 author: omer-nachman
 branding:
   icon: check-circle
