@@ -1,0 +1,119 @@
+# runlab verdict as a GitHub Action: records the RESULT lines your job wrote, compares the arms
+# that .runlab/verdict.yml names (read from the pull request's base commit) and posts the
+# `runlab verdict` check run, one pull-request comment and the job summary. The logic is
+# `runlab verdict` in runlab-client (pip); this file only installs and runs it.
+#
+# Inputs reach the shell only through env, never `${{ }}` inside `run:`, so no input value
+# can inject shell code.
+name: runlab verdict
+description: >-
+  Did this change help? A pull-request check with the difference, its 95 % CI and the verdict
+  over seeds; fails when the change misses what you expected of it.
+author: omer-nachman
+branding:
+  icon: check-circle
+  color: green
+inputs:
+  runlab-key:
+    description: >-
+      Empty (default): keyless; the job needs `permissions: id-token: write` and signs in with
+      its GitHub OIDC token as the RunLab user who owns the repository (`runlab login` once).
+      An organization's repository passes a RunLab key here, from a secret.
+    default: ""
+  results:
+    description: >-
+      The files whose RESULT lines to record, one per line: `GLOB [--arm A] [--project P]`,
+      e.g. `out/pr/*.txt --arm pr-{pr}-{sha7}`. `--arm` renames the lines' experiment;
+      {pr}, {sha}, {sha7} and {branch} are filled in. Empty: compare what is already recorded.
+    default: ""
+  spec:
+    description: Path of the verdict spec in the repository.
+    default: .runlab/verdict.yml
+  spec-from:
+    description: >-
+      `base` (default): the spec on the pull request's base commit, so a pull request cannot
+      loosen the test it is judged by (no spec there yet: a neutral check). `head`: the
+      checked-out spec, to try a new one.
+    default: base
+  post:
+    description: "`true`: write the check run and the pull-request comment; `false`: the job summary only."
+    default: "true"
+  fail:
+    description: "`true`: the step fails when a verdict misses its `expect`; `false`: only the check run fails."
+    default: "true"
+  url:
+    description: Your RunLab URL; empty uses https://runlab.tools.
+    default: ""
+  token:
+    description: "Token for the Checks and Issues APIs (needs `checks: write`, `pull-requests: write`)."
+    default: ${{ github.token }}
+  python-version:
+    description: Python to set up with actions/setup-python; empty uses the runner's python.
+    default: "3.12"
+  version:
+    description: The runlab-client version to install; the ref in `uses:` pins its default.
+    default: "0.4.0"
+outputs:
+  conclusion:
+    description: success, failure or neutral.
+    value: ${{ steps.verdict.outputs.conclusion }}
+  failed:
+    description: Number of checks that failed.
+    value: ${{ steps.verdict.outputs.failed }}
+  checks:
+    description: Number of checks judged.
+    value: ${{ steps.verdict.outputs.checks }}
+  url:
+    description: The check run's URL (empty when post is false).
+    value: ${{ steps.verdict.outputs.url }}
+runs:
+  using: composite
+  steps:
+    - if: inputs.python-version != ''
+      uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+      with:
+        python-version: ${{ inputs.python-version }}
+    - name: Install runlab-client
+      shell: bash
+      env:
+        RUNLAB_VERSION: ${{ inputs.version }}
+      run: |
+        python -m pip install --quiet --disable-pip-version-check \
+          "runlab-client[yaml]==${RUNLAB_VERSION}"
+    - name: runlab verdict
+      id: verdict
+      shell: bash
+      env:
+        RUNLAB_TOKEN: ${{ inputs.runlab-key }}
+        RUNLAB_URL: ${{ inputs.url }}
+        GITHUB_TOKEN: ${{ inputs.token }}
+        RUNLAB_RESULTS: ${{ inputs.results }}
+        RUNLAB_SPEC: ${{ inputs.spec }}
+        RUNLAB_SPEC_FROM: ${{ inputs.spec-from }}
+        RUNLAB_POST: ${{ inputs.post }}
+        RUNLAB_FAIL: ${{ inputs.fail }}
+        RUNLAB_FORK: ${{ github.event.pull_request.head.repo.full_name != '' && github.event.pull_request.head.repo.full_name != github.repository }}
+      run: |
+        set +e -u   # the runner's bash -e would stop at exit 4 before `fail` is read
+        if [ -z "$RUNLAB_TOKEN" ] && [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+          if [ "$RUNLAB_FORK" = "true" ]; then
+            echo "::notice::runlab verdict: pull requests from forks get no OIDC token or secrets, so no verdict"
+            echo "conclusion=neutral" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "::error::runlab verdict: no credentials; add 'id-token: write' to the job's permissions (keyless), or pass runlab-key"
+          exit 2
+        fi
+        case "$RUNLAB_SPEC_FROM" in
+          base|head) ;;
+          *) echo "::error::spec-from is base or head, got '$RUNLAB_SPEC_FROM'"; exit 2 ;;
+        esac
+        args=(verdict --spec "$RUNLAB_SPEC" --spec-from "$RUNLAB_SPEC_FROM")
+        [ "$RUNLAB_POST" = "true" ] && args+=(--post)
+        while IFS= read -r line || [ -n "$line" ]; do
+          [ -n "${line//[[:space:]]/}" ] && args+=(--results "$line")
+        done <<< "${RUNLAB_RESULTS:-}"
+        python -m runlab_client "${args[@]}"
+        code=$?
+        if [ "$code" -eq 4 ] && [ "$RUNLAB_FAIL" != "true" ]; then code=0; fi
+        exit "$code"
